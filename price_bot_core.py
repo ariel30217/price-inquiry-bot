@@ -133,8 +133,14 @@ class InteractiveLogin:
         await self.page.set_viewport_size({"width": 1280, "height": 800})
 
     async def goto_login(self):
-        await self.page.goto("https://www.momoshop.com.tw/member/login.jsp")
-        await asyncio.sleep(2)
+        # 更新為 momo 目前正確的登入網址
+        await self.page.goto("https://www.momoshop.com.tw/signin/login.jsp")
+        await asyncio.sleep(3)
+        # 如果網址還是不對，嘗試從首頁進入
+        if "404" in await self.page.title() or await self.page.locator("text=網頁真不存在").is_visible():
+            await self.page.goto("https://www.momoshop.com.tw/main/Main.jsp")
+            await self.page.get_by_text("登入").first.click()
+            await asyncio.sleep(2)
         return await self.take_screenshot()
 
     async def enter_account(self, account):
