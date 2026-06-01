@@ -7,7 +7,7 @@ import re
 from flask import Flask
 import threading
 
-# 定義對話狀態 (新增 WAITING_OTP)
+# 定義對話狀態
 WAITING_ACCOUNT, WAITING_PASSWORD, WAITING_OTP = range(3)
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '8952469404:AAGGHnKKVV040mz3EXRWM9DLv_-ATEGPBU8')
@@ -45,9 +45,6 @@ async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = login_sessions.get(user_id)
     await session.enter_password(password)
     screenshot = await session.click_login()
-    
-    # 判斷是否需要驗證碼 (簡單判斷畫面是否有 OTP 關鍵字)
-    # 我們讓使用者自己看截圖決定，如果需要驗證碼，請輸入，否則輸入 'ok' 結束
     await update.message.reply_photo(photo=open(screenshot, 'rb'), 
         caption="畫面已更新。如需輸入【簡訊驗證碼】，請直接回覆數字；若已成功登入，請回覆『ok』：")
     return WAITING_OTP
@@ -56,25 +53,18 @@ async def get_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     otp_text = update.message.text
     session = login_sessions.get(user_id)
-    
     if otp_text.lower() != 'ok':
         await update.message.reply_text("正在提交驗證碼...")
         screenshot = await session.enter_otp(otp_text)
         await update.message.reply_photo(photo=open(screenshot, 'rb'), caption="驗證碼已提交。")
-
-    # 結束連線並存檔
     await session.finish()
     if user_id in login_sessions: del login_sessions[user_id]
-    
     await update.message.reply_text("✅ 登入流程結束。")
-    
-    # 自動搜尋邏輯
     post_item = context.user_data.pop('post_login_search', None)
     if post_item:
         await update.message.reply_text(f"🔍 正在查詢「{post_item}」會員價...")
         price_info, _ = await inquiry_price(post_item, use_auth=True)
         await update.message.reply_text(f"✨【會員專屬結果】\n{price_info}")
-        
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -100,7 +90,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     item_name = re.sub(r"[？?。！!,，]", "", user_text).strip()
     if not item_name: return
-
     has_auth = os.path.exists('auth.json')
     if has_auth:
         await update.message.reply_text(f"🔑 查詢「{item_name}」會員價...")
@@ -111,6 +100,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         price_info, _ = await inquiry_price(item_name, use_auth=False)
         keyboard = [[InlineKeyboardButton("🔑 查看會員折扣價", callback_data=f"login_and_search|{item_name}")] ]
         await update.message.reply_text(f"【訪客結果】\n{price_info}", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """處理使用者上傳的 auth.json 檔案"""
+    file = await update.message.document.get_file()
+    if update.message.document.file_name == 'auth.json':
+        await file.download_to_drive('auth.json')
+        await update.message.reply_text("✅ 收到登入資訊！雲端機器人現在已同步。")
 
 # Flask Health Check
 flask_app = Flask(__name__)
