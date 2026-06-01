@@ -76,7 +76,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if is_cached: response += "\n(資料來自快取 ⚡️)"
         await query.message.reply_text(response)
 
+from flask import Flask
+import threading
+
+# 建立一個極簡的 Flask 伺服器，讓 Render 偵測到通訊埠
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+def health_check():
+    return "I am alive!", 200
+
+def run_flask():
+    # Render 會提供 PORT 環境變數，預設為 10000
+    port = int(os.environ.get("PORT", 10000))
+    flask_app.run(host='0.0.0.0', port=port)
+
 if __name__ == '__main__':
+    # 在背景啟動 Flask
+    threading.Thread(target=run_flask, daemon=True).start()
+    
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("logout", logout))
