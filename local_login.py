@@ -6,30 +6,32 @@ from price_bot_core import login_via_chrome
 
 # --- 設定區 ---
 RENDER_URL = "https://price-inquiry-bot-1-sbni.onrender.com"
-BOT_TOKEN = "8952469404:AAGGHnKKVV040mz3EXRWM9DLv_-ATEGPBU8"
 
-async def auto_sync_process(chat_id):
-    print("\n🔔 收到連動指令！正在開啟 momo 登入視窗...")
+async def silent_sync(user_id):
+    """執行登入並透過背景 API 傳輸，不經過 Telegram 聊天室"""
+    print("\n🔔 收到指令！正在彈出 momo 登入視窗...")
     await login_via_chrome()
     
     if os.path.exists('auth.json'):
-        print("✅ 登入成功，正在將身分證同步回雲端...")
-        # 透過 Telegram 官方 API 把檔案傳給機器人，這 100% 穩定
+        print("✅ 登入成功，正在執行隱形同步...")
+        # 透過背景接口傳送，這不會出現在 Telegram 聊天室
         with open('auth.json', 'rb') as f:
-            requests.post(
-                f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
-                data={"chat_id": chat_id},
-                files={"document": f}
-            )
-        print("✨ 同步完成！請回到手機看結果。")
+            try:
+                resp = requests.post(f"{RENDER_URL}/upload_auth", files={'file': f}, timeout=30)
+                if resp.status_code == 200:
+                    print("✨ 同步完成！請查看您的手機。")
+                else:
+                    print(f"❌ 同步失敗，伺服器回報: {resp.status_code}")
+            except Exception as e:
+                print(f"❌ 連線失敗: {e}")
     else:
         print("❌ 登入失敗。")
 
 async def main():
     print("========================================")
-    print("   Momo 雲端連動助手 v3 (極穩版)")
+    print("   Momo 雲端連動助手 v4 (隱形同步版)")
     print("========================================")
-    print("📡 正在守候指令... (手機點擊按鈕即可觸發)")
+    print("📡 守候指令中... (此視窗可縮小)")
     
     while True:
         try:
@@ -37,7 +39,7 @@ async def main():
             if resp.status_code == 200:
                 signal = resp.json()
                 if signal.get("action") == "login":
-                    await auto_sync_process(signal.get("user_id"))
+                    await silent_sync(signal.get("user_id"))
         except: pass
         await asyncio.sleep(5)
 
