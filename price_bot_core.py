@@ -138,23 +138,25 @@ class InteractiveLogin:
         return await self.take_screenshot()
 
     async def enter_account(self, account):
-        selectors = ["#memId", "#userId", "input[type='text']", "input[name='memId']"]
-        for s in selectors:
-            try:
-                if await self.page.locator(s).is_visible():
-                    await self.page.fill(s, account)
-                    break
-            except: continue
+        # 更加通用的尋找方式：找第一個可見的文字輸入框
+        try:
+            target = self.page.locator("input[type='text'], input[name='memId'], #memId").first
+            await target.click()
+            await target.fill("") # 先清空
+            await target.type(account, delay=100) # 模擬真實打字速度
+        except Exception as e:
+            print(f"填寫帳號失敗: {e}")
         return await self.take_screenshot()
 
     async def enter_password(self, password):
-        selectors = ["#passwd", "#password", "input[type='password']"]
-        for s in selectors:
-            try:
-                if await self.page.locator(s).is_visible():
-                    await self.page.fill(s, password)
-                    break
-            except: continue
+        # 尋找第一個可見的密碼輸入框
+        try:
+            target = self.page.locator("input[type='password'], #passwd").first
+            await target.click()
+            await target.fill("") # 先清空
+            await target.type(password, delay=100)
+        except Exception as e:
+            print(f"填寫密碼失敗: {e}")
         return await self.take_screenshot()
 
     async def click_login(self):
