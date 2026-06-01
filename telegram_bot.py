@@ -4,8 +4,13 @@ import asyncio
 from price_bot_core import inquiry_price, login_via_chrome
 import os
 import re
+from flask import Flask
+import threading
+import json
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '8952469404:AAGGHnKKVV040mz3EXRWM9DLv_-ATEGPBU8')
+# 用來存放連動訊號的檔案 (簡單實作)
+BRIDGE_SIGNAL = 'bridge_signal.json'
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('你好！我是詢價機器人。\n• 直接輸入商品名稱進行查詢\n• 輸入 /logout 可以清除登入資訊')
@@ -17,101 +22,63 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("目前為登出狀態。")
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = update.message.text
-    
-    # 按長度從長到短排序過濾詞，避免長詞被短詞切斷後留下殘渣
-    filter_words = [
-        "的價格", "的價錢", "賣多少錢", "賣多少", "多少錢", "找一下", 
-        "想知道", "幫我", "搜尋", "查詢", "有沒有", "請問", "價格", 
-        "價錢", "看看", "多少", "想問", "找", "的"
-    ]
-    
-    item_name = user_text
-    for word in filter_words:
-        item_name = item_name.replace(word, "")
-    
-    # 清理剩餘的標點符號與前後空格
-    item_name = re.sub(r"[？?。！!,，]", "", item_name).strip()
-    
-    if not item_name:
-        await update.message.reply_text("請輸入具體的商品名稱喔！例如：Nike 球鞋")
-        return
-
-    has_auth = os.path.exists('auth.json')
-    
-    if has_auth:
-        await update.message.reply_text(f"🔑 偵測到登入，為您查詢「{item_name}」的【會員價】...")
-        price_info, is_cached = await inquiry_price(item_name, use_auth=True)
-        
-        response = f"✨【會員專屬結果】\n{price_info}"
-        if is_cached: response += "\n(資料來自快取 ⚡️)"
-        await update.message.reply_text(response)
-    else:
-        await update.message.reply_text(f"🔍 查詢「{item_name}」的一般訪客價...")
-        price_info, is_cached = await inquiry_price(item_name, use_auth=False)
-        
-        keyboard = [[InlineKeyboardButton("🔑 查看會員折扣價 (需登入)", callback_data=f"login_and_search|{item_name}")] ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        response = f"【訪客結果】\n{price_info}"
-        if is_cached: response += "\n(資料來自快取 ⚡️)"
-        await update.message.reply_text(response, reply_markup=reply_markup)
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def trigger_bridge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """觸發連動登入訊號"""
     query = update.callback_query
     await query.answer()
-    action, item_name = query.data.split("|")
+    await query.edit_message_reply_markup(reply_markup=None)
     
-    if action == "login_and_search":
-        await query.edit_message_reply_markup(reply_markup=None)
-        
-        if not os.path.exists('auth.json'):
-            await query.message.reply_text("請完成電腦上的 momo 登入並關閉視窗。")
-            await login_via_chrome()
-            await query.message.reply_text("✅ 登入完成！正在查詢會員價...")
-        
+    # 在雲端建立一個訊號，讓本地橋樑看到
+    with open(BRIDGE_SIGNAL, 'w') as f:
+        json.dump({"action": "login", "user_id": update.effective_user.id, "item": context.user_data.get('post_login_search')}, f)
+    
+    await query.message.reply_text("📡 已發送連動訊號！請在您的電腦上確認彈出的登入視窗。\n(完成後雲端會自動同步)")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = update.message.text
+    filter_words = ["的價格", "的價錢", "賣多少錢", "賣多少", "多少錢", "找一下", "想知道", "幫我", "搜尋", "查詢", "有沒有", "請問", "價格", "價錢", "看看", "多少", "想問", "找", "的"]
+    item_name = user_text
+    for word in filter_words: item_name = item_name.replace(word, "")
+    item_name = re.sub(r"[？?。！!,，]", "", item_name).strip()
+    
+    if not item_name: return
+
+    if os.path.exists('auth.json'):
+        await update.message.reply_text(f"🔑 為您查詢「{item_name}」的【會員價】...")
         price_info, is_cached = await inquiry_price(item_name, use_auth=True)
-        response = f"✨【會員專屬結果】\n{price_info}\n(您可以對照上方訪客價查看價差)"
-        if is_cached: response += "\n(資料來自快取 ⚡️)"
-        await query.message.reply_text(response)
-
-from flask import Flask
-import threading
-
-# 建立一個極簡的 Flask 伺服器，讓 Render 偵測到通訊埠
-flask_app = Flask(__name__)
-
-@flask_app.route('/')
-def health_check():
-    return "I am alive!", 200
-
-def run_flask():
-    # Render 會提供 PORT 環境變數，預設為 10000
-    port = int(os.environ.get("PORT", 10000))
-    flask_app.run(host='0.0.0.0', port=port)
+        await update.message.reply_text(f"✨【會員結果】\n{price_info}")
+    else:
+        await update.message.reply_text(f"🔍 查詢「{item_name}」訪客價...")
+        price_info, is_cached = await inquiry_price(item_name, use_auth=False)
+        context.user_data['post_login_search'] = item_name
+        keyboard = [[InlineKeyboardButton("🔗 啟動電腦連動登入", callback_data="run_bridge")]]
+        await update.message.reply_text(f"【訪客結果】\n{price_info}", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """處理使用者上傳的 auth.json 檔案"""
     file = await update.message.document.get_file()
-    file_name = update.message.document.file_name
-    
-    if file_name == 'auth.json':
+    if update.message.document.file_name == 'auth.json':
         await file.download_to_drive('auth.json')
-        await update.message.reply_text("✅ 收到登入資訊！雲端機器人現在已同步為【會員狀態】。")
-    else:
-        await update.message.reply_text("這不是正確的 auth.json 檔案喔。")
+        await update.message.reply_text("✅ 收到登入資訊！雲端現在已同步。")
+
+flask_app = Flask(__name__)
+@flask_app.route('/')
+def h(): return "ok", 200
+@flask_app.route('/get_signal')
+def get_signal():
+    if os.path.exists(BRIDGE_SIGNAL):
+        with open(BRIDGE_SIGNAL, 'r') as f: data = f.read()
+        os.remove(BRIDGE_SIGNAL) # 讀取後刪除
+        return data, 200
+    return "{}", 200
+
+def run_f(): flask_app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
 
 if __name__ == '__main__':
-    # 在背景啟動 Flask
-    threading.Thread(target=run_flask, daemon=True).start()
-    
+    threading.Thread(target=run_f, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("logout", logout))
-    # 新增：接收檔案的處理器
+    app.add_handler(CallbackQueryHandler(trigger_bridge, pattern="run_bridge"))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    print("機器人啟動中...")
     app.run_polling()
