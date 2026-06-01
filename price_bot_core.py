@@ -93,7 +93,8 @@ async def get_product_price_with_chrome(item_name, use_auth=False):
             return f"品名：{product_name}\n{mode_tag} 價格：{product_price}"
 
         except Exception as e:
-            await browser.close()
+            try: await browser.close()
+            except: pass
             return f"搜尋失敗: {str(e)[:20]}"
 
 async def inquiry_price(item_name, use_auth=False):
