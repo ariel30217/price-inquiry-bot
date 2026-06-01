@@ -1,73 +1,14 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, ConversationHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 import asyncio
-from price_bot_core import inquiry_price, login_via_chrome, InteractiveLogin
+from price_bot_core import inquiry_price, login_via_chrome
 import os
 import re
-from flask import Flask
-import threading
-
-# 定義對話狀態
-WAITING_ACCOUNT, WAITING_PASSWORD = range(2)
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '8952469404:AAGGHnKKVV040mz3EXRWM9DLv_-ATEGPBU8')
 
-# 儲存每個使用者的登入會話
-login_sessions = {}
-
-async def start_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """開始登入流程"""
-    user_id = update.effective_user.id
-    await update.message.reply_text("🚀 正在雲端啟動瀏覽器，請稍候...")
-    
-    session = InteractiveLogin()
-    await session.start()
-    screenshot = await session.goto_login()
-    
-    login_sessions[user_id] = session
-    
-    await update.message.reply_photo(photo=open(screenshot, 'rb'), caption="已到達 momo 登入頁。請輸入您的【帳號】：")
-    return WAITING_ACCOUNT
-
-async def get_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    account = update.message.text
-    session = login_sessions.get(user_id)
-    
-    screenshot = await session.enter_account(account)
-    await update.message.reply_photo(photo=open(screenshot, 'rb'), caption=f"帳號已填入。請輸入【密碼】：\n(提醒：輸入後可刪除此訊息以策安全)")
-    return WAITING_PASSWORD
-
-async def get_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    password = update.message.text
-    session = login_sessions.get(user_id)
-    
-    # 填入密碼並點擊登入
-    await session.enter_password(password)
-    screenshot = await session.click_login()
-    
-    # 這裡我們直接結束並存檔
-    await session.finish()
-    if user_id in login_sessions:
-        del login_sessions[user_id]
-    
-    await update.message.reply_photo(photo=open(screenshot, 'rb'), caption="✅ 嘗試登入完成！若畫面顯示成功，現在已可查詢會員價。")
-    return ConversationHandler.END
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id in login_sessions:
-        # 確保關閉瀏覽器
-        try:
-            await login_sessions[user_id].browser.close()
-        except: pass
-        del login_sessions[user_id]
-    await update.message.reply_text("已取消登入流程。")
-    return ConversationHandler.END
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text('你好！我是詢價機器人。\n• 直接輸入商品名稱進行查詢\n• 輸入 /login 開始遠端登入\n• 輸入 /logout 可以清除登入資訊')
+    await update.message.reply_text('你好！我是詢價機器人。\n• 直接輸入商品名稱進行查詢\n• 輸入 /logout 可以清除登入資訊')
 
 async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if os.path.exists('auth.json'):
@@ -166,23 +107,11 @@ if __name__ == '__main__':
     threading.Thread(target=run_flask, daemon=True).start()
     
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
-    # 建立登入對話處理器
-    login_conv = ConversationHandler(
-        entry_points=[CommandHandler("login", start_login)],
-        states={
-            WAITING_ACCOUNT: [MessageHandler(filters.TEXT & (~filters.COMMAND), get_account)],
-            WAITING_PASSWORD: [MessageHandler(filters.TEXT & (~filters.COMMAND), get_password)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    
-    app.add_handler(login_conv)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("logout", logout))
-    # 原有的接收檔案功能保留作為備援
+    # 新增：接收檔案的處理器
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app.add_handler(CallbackQueryHandler(button_handler))
-    print("機器人啟動中 (支援雲端互動登入)...")
+    print("機器人啟動中...")
     app.run_polling()

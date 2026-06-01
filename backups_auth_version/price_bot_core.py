@@ -103,7 +103,6 @@ async def inquiry_price(item_name, use_auth=False):
     return price, False
 
 async def login_via_chrome():
-    # 保留原本的本地登入功能，供 local_login.py 使用
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
         context = await browser.new_context()
@@ -115,47 +114,3 @@ async def login_via_chrome():
         await context.storage_state(path=AUTH_FILE)
         await browser.close()
         return "成功"
-
-class InteractiveLogin:
-    def __init__(self):
-        self.playwright = None
-        self.browser = None
-        self.context = None
-        self.page = None
-
-    async def start(self):
-        self.playwright = await async_playwright().start()
-        is_cloud = os.environ.get('RENDER') or os.environ.get('CI') or os.path.exists('/.dockerenv')
-        # 雲端必須使用 headless=True，但我們會透過截圖傳給使用者看
-        self.browser = await self.playwright.chromium.launch(headless=True if is_cloud else False)
-        self.context = await self.browser.new_context()
-        self.page = await self.context.new_page()
-        await self.page.set_viewport_size({"width": 1280, "height": 800})
-
-    async def goto_login(self):
-        await self.page.goto("https://www.momoshop.com.tw/member/login.jsp")
-        await asyncio.sleep(2)
-        return await self.take_screenshot()
-
-    async def enter_account(self, account):
-        await self.page.fill("#memId", account)
-        return await self.take_screenshot()
-
-    async def enter_password(self, password):
-        await self.page.fill("#passwd", password)
-        return await self.take_screenshot()
-
-    async def click_login(self):
-        await self.page.click("#loginBtn")
-        await asyncio.sleep(3)
-        return await self.take_screenshot()
-
-    async def take_screenshot(self):
-        path = "login_step.png"
-        await self.page.screenshot(path=path)
-        return path
-
-    async def finish(self):
-        await self.context.storage_state(path=AUTH_FILE)
-        await self.browser.close()
-        await self.playwright.stop()
