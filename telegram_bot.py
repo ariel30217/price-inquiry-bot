@@ -91,6 +91,17 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     flask_app.run(host='0.0.0.0', port=port)
 
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """處理使用者上傳的 auth.json 檔案"""
+    file = await update.message.document.get_file()
+    file_name = update.message.document.file_name
+    
+    if file_name == 'auth.json':
+        await file.download_to_drive('auth.json')
+        await update.message.reply_text("✅ 收到登入資訊！雲端機器人現在已同步為【會員狀態】。")
+    else:
+        await update.message.reply_text("這不是正確的 auth.json 檔案喔。")
+
 if __name__ == '__main__':
     # 在背景啟動 Flask
     threading.Thread(target=run_flask, daemon=True).start()
@@ -98,6 +109,8 @@ if __name__ == '__main__':
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("logout", logout))
+    # 新增：接收檔案的處理器
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     app.add_handler(CallbackQueryHandler(button_handler))
     print("機器人啟動中...")
