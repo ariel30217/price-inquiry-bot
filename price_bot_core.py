@@ -42,41 +42,48 @@ async def get_product_price_with_chrome(item_name, use_auth=False):
         
         try:
             search_url = f"https://www.momoshop.com.tw/search/searchShop.jsp?keyword={item_name}"
+            # 增加 User-Agent 模擬真實瀏覽器
+            await page.set_extra_http_headers({
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            })
+            
             await page.goto(search_url, wait_until="domcontentloaded", timeout=40000)
             await page.evaluate("window.scrollBy(0, 500)")
-            await asyncio.sleep(2.5)
+            await asyncio.sleep(4) # 增加等待時間，確保 JavaScript 渲染完成
 
-            # --- 改進：品名過濾邏輯 ---
+            # --- 品名過濾邏輯 ---
             product_name = item_name
-            name_candidates = page.locator(".prdName, .goodsUrl, .eachGood .name")
+            name_candidates = page.locator(".prdName, .goodsUrl, .eachGood .name, .productName")
             count = await name_candidates.count()
             
-            for i in range(min(count, 5)): # 掃描前 5 個標籤
+            for i in range(min(count, 5)):
                 candidate_text = await name_candidates.nth(i).inner_text()
                 clean_name = candidate_text.split('\n')[0].strip()
-                
-                # 排除過短的廣告標語 (如: 滿1件折259, 登記送...)
-                # 真正的品名通常會包含至少 5 個中文字以上，且不應該只是折扣公式
                 is_ad = bool(re.search(r"滿.*件.*折| mo點 | % |登記|限時", clean_name))
-                
-                if is_ad and len(clean_name) < 12:
-                    continue # 這是廣告，跳過
-                else:
+                if not (is_ad and len(clean_name) < 12):
                     product_name = clean_name
                     break
 
-            # --- 改進：價格抓取邏輯 ---
+            # --- 價格抓取邏輯 (強化版) ---
             product_price = "暫時找不到價格"
-            price_selectors = [".prdPrice", ".price", ".money", "b.price"]
+            # 增加更多可能的價格選擇器
+            price_selectors = [
+                ".prdPrice", ".price", ".money", "b.price", 
+                ".total-price", ".eachGood .price", ".priceArea .money"
+            ]
             for selector in price_selectors:
-                elem = page.locator(selector).first
-                if await elem.is_visible():
-                    raw_price = await elem.inner_text()
-                    # 濾除所有非數字內容，僅保留金額
-                    clean_digits = "".join(re.findall(r'[0-9]+', raw_price))
-                    if clean_digits:
-                        product_price = f"{clean_digits} 元"
-                        break
+                elements = page.locator(selector)
+                count = await elements.count()
+                for i in range(count):
+                    elem = elements.nth(i)
+                    if await elem.is_visible():
+                        raw_price = await elem.inner_text()
+                        clean_digits = "".join(re.findall(r'[0-9]+', raw_price))
+                        if clean_digits and int(clean_digits) > 0:
+                            product_price = f"{clean_digits} 元"
+                            break
+                if product_price != "暫時找不到價格":
+                    break
 
             await browser.close()
             mode_tag = "【會員】" if use_auth else "【訪客】"
