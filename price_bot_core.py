@@ -138,39 +138,54 @@ class InteractiveLogin:
         self.context = await self.browser.new_context()
         self.page = await self.context.new_page()
         await self.page.set_viewport_size({"width": 1280, "height": 800})
+async def goto_login(self):
+    # 使用使用者提供的秘密通道：TV App 登入頁 (通常防護較少且結構簡單)
+    target_url = "https://app.momoshop.com.tw/api/moecapp/authThird?client_id=TvApp&redirect_uri=https://tv.momoshop.com.tw/mymomo/thirdLogin.momo&preUrl=https://tv.momoshop.com.tw/mymomo/membercenter.momo"
+    try:
+        await self.page.goto(target_url, wait_until="load", timeout=60000)
+        await asyncio.sleep(3)
+    except Exception as e:
+        print(f"秘密通道進入失敗: {e}")
+        await self.page.goto("https://m.momoshop.com.tw/login.jsp")
 
-    async def goto_login(self):
-        # 採用最穩定的方法：先去首頁，再點登入
+    return await self.take_screenshot()
+
+async def enter_account(self, account):
+    # 嘗試多種可能的帳號輸入框 ID
+    selectors = ["#memId", "#userId", "input[type='text']", "input[name='memId']"]
+    for s in selectors:
         try:
-            await self.page.goto("https://www.momoshop.com.tw/main/Main.jsp", wait_until="networkidle", timeout=60000)
-            # 尋找頂部的「登入」連結
-            login_link = self.page.locator("text=登入").first
-            if await login_link.is_visible():
-                await login_link.click()
-            else:
-                # 備援：直接去手機版登入頁，通常防護較少
-                await self.page.goto("https://m.momoshop.com.tw/login.jsp")
-            
-            await asyncio.sleep(4)
-        except Exception as e:
-            print(f"導航失敗: {e}")
-            # 最後一招：強制導向
-            await self.page.goto("https://www.momoshop.com.tw/signin/login.jsp")
-            await asyncio.sleep(4)
-            
-        return await self.take_screenshot()
+            if await self.page.locator(s).is_visible():
+                await self.page.fill(s, account)
+                break
+        except: continue
+    return await self.take_screenshot()
 
-    async def enter_account(self, account):
-        await self.page.fill("#memId", account)
-        return await self.take_screenshot()
+async def enter_password(self, password):
+    # 嘗試多種可能的密碼輸入框 ID
+    selectors = ["#passwd", "#password", "input[type='password']"]
+    for s in selectors:
+        try:
+            if await self.page.locator(s).is_visible():
+                await self.page.fill(s, password)
+                break
+        except: continue
+    return await self.take_screenshot()
 
-    async def enter_password(self, password):
-        await self.page.fill("#passwd", password)
-        return await self.take_screenshot()
+async def click_login(self):
+    # 嘗試多種可能的登入按鈕
+    selectors = ["#loginBtn", ".btn-login", "button:has-text('登入')", ".login_btn"]
+    for s in selectors:
+        try:
+            btn = self.page.locator(s).first
+            if await btn.is_visible():
+                await btn.click()
+                break
+        except: continue
 
-    async def enter_otp(self, otp_code):
-        # momo 的簡訊驗證碼輸入框通常有特定的 ID 或 class
-        # 這裡我們嘗試尋找常見的驗證碼輸入框
+    await asyncio.sleep(5) # 登入跳轉通常較慢，多等一下
+    return await self.take_screenshot()
+
         otp_selectors = ["#otpCode", "input[name='otpCode']", ".otp-input"]
         for selector in otp_selectors:
             if await self.page.locator(selector).is_visible():
