@@ -16,6 +16,14 @@ login_sessions = {}
 async def start_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = update.effective_user.id
+    
+    # --- 優化：自動清理舊會話 ---
+    if user_id in login_sessions:
+        try:
+            await login_sessions[user_id].finish()
+        except: pass
+        del login_sessions[user_id]
+
     if query:
         await query.answer()
         await query.edit_message_reply_markup(reply_markup=None)
@@ -23,6 +31,7 @@ async def start_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_msg = query.message
     else:
         target_msg = update.message
+        
     await target_msg.reply_text("🚀 正在啟動雲端瀏覽器...")
     session = InteractiveLogin()
     await session.start()
@@ -70,16 +79,21 @@ async def get_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in login_sessions:
-        try: await login_sessions[user_id].browser.close()
+        try: await login_sessions[user_id].finish()
         except: pass
         del login_sessions[user_id]
-    await update.message.reply_text("已取消。")
+    await update.message.reply_text("已重設登入流程。")
     return ConversationHandler.END
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('你好！輸入 /login 開始登入，或直接輸入商品名稱查詢。')
 
 async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 如果正在登入中，先取消
+    user_id = update.effective_user.id
+    if user_id in login_sessions:
+        await cancel(update, context)
+        
     if os.path.exists('auth.json'):
         os.remove('auth.json')
         await update.message.reply_text("✅ 已登出。")
@@ -88,22 +102,8 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
-    # 強化版過濾詞
-    filter_words = [
-        "的價格", "的價錢", "賣多少錢", "賣多少", "多少錢", "找一下", 
-        "想知道", "幫我", "搜尋", "查詢", "有沒有", "請問", "價格", 
-        "價錢", "看看", "多少", "想問", "找", "的"
-    ]
-    item_name = user_text
-    for word in filter_words:
-        item_name = item_name.replace(word, "")
-    
-    # 清理剩餘的標點符號與前後空格
-    item_name = re.sub(r"[？?。！!,，]", "", item_name).strip()
-    
-    if not item_name:
-        await update.message.reply_text("請輸入具體的商品名稱喔！")
-        return
+    item_name = re.sub(r"[？?。！!,，]", "", user_text).strip()
+    if not item_name: return
     has_auth = os.path.exists('auth.json')
     if has_auth:
         await update.message.reply_text(f"🔑 查詢「{item_name}」會員價...")
@@ -116,13 +116,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"【訪客結果】\n{price_info}", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """處理使用者上傳的 auth.json 檔案"""
     file = await update.message.document.get_file()
     if update.message.document.file_name == 'auth.json':
         await file.download_to_drive('auth.json')
         await update.message.reply_text("✅ 收到登入資訊！雲端機器人現在已同步。")
 
-# Flask Health Check
 flask_app = Flask(__name__)
 @flask_app.route('/')
 def h(): return "ok", 200
@@ -138,7 +136,8 @@ if __name__ == '__main__':
             WAITING_PASSWORD: [MessageHandler(filters.TEXT & (~filters.COMMAND), get_password)],
             WAITING_OTP: [MessageHandler(filters.TEXT & (~filters.COMMAND), get_otp)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("login", start_login), CommandHandler("logout", logout)],
+        allow_reentry=True
     )
     app.add_handler(login_conv)
     app.add_handler(CommandHandler("start", start))

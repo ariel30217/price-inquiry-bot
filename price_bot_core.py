@@ -115,12 +115,32 @@ class InteractiveLogin:
         return await self.take_screenshot()
 
     async def click_login(self):
-        await self.page.evaluate("""() => {
-            const btn = document.querySelector("#loginBtn, .btn-login, button[type='submit'], .login_btn") 
-                        || Array.from(document.querySelectorAll("button")).find(b => b.innerText.includes('登入'));
-            if (btn) btn.click();
-        }""")
-        await asyncio.sleep(6)
+        # 1. 優先嘗試 Playwright 的智慧點擊 (尋找寫著「登入」的按鈕)
+        try:
+            login_btn = self.page.get_by_text("登入", exact=True).first
+            if await login_btn.is_visible():
+                await login_btn.click(timeout=3000)
+                print("已透過智慧點擊觸發登入")
+            else:
+                # 2. 備援：使用 JS 尋找所有可能的登入按鈕並點擊
+                await self.page.evaluate("""() => {
+                    const targets = document.querySelectorAll('button, a, div, span, input[type="submit"]');
+                    for (const el of targets) {
+                        if (el.innerText && el.innerText.trim() === '登入' && el.offsetWidth > 0) {
+                            el.click();
+                            return;
+                        }
+                    }
+                }""")
+                print("已透過 JS 尋找並點擊登入")
+        except Exception as e:
+            print(f"點擊嘗試失敗: {e}")
+            # 3. 最後一招：對著輸入框按 Enter 鍵
+            await self.page.keyboard.press("Enter")
+            print("已嘗試按 Enter 鍵送出")
+        
+        # 登入後通常需要較長跳轉時間，特別是如果要收驗證碼
+        await asyncio.sleep(8)
         return await self.take_screenshot()
 
     async def enter_otp(self, code):
