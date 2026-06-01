@@ -140,14 +140,24 @@ class InteractiveLogin:
         await self.page.set_viewport_size({"width": 1280, "height": 800})
 
     async def goto_login(self):
-        # 更新為 momo 目前正確的登入網址
-        await self.page.goto("https://www.momoshop.com.tw/signin/login.jsp")
-        await asyncio.sleep(3)
-        # 如果網址還是不對，嘗試從首頁進入
-        if "404" in await self.page.title() or await self.page.locator("text=網頁真不存在").is_visible():
-            await self.page.goto("https://www.momoshop.com.tw/main/Main.jsp")
-            await self.page.get_by_text("登入").first.click()
-            await asyncio.sleep(2)
+        # 採用最穩定的方法：先去首頁，再點登入
+        try:
+            await self.page.goto("https://www.momoshop.com.tw/main/Main.jsp", wait_until="networkidle", timeout=60000)
+            # 尋找頂部的「登入」連結
+            login_link = self.page.locator("text=登入").first
+            if await login_link.is_visible():
+                await login_link.click()
+            else:
+                # 備援：直接去手機版登入頁，通常防護較少
+                await self.page.goto("https://m.momoshop.com.tw/login.jsp")
+            
+            await asyncio.sleep(4)
+        except Exception as e:
+            print(f"導航失敗: {e}")
+            # 最後一招：強制導向
+            await self.page.goto("https://www.momoshop.com.tw/signin/login.jsp")
+            await asyncio.sleep(4)
+            
         return await self.take_screenshot()
 
     async def enter_account(self, account):

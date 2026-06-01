@@ -88,8 +88,22 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
-    item_name = re.sub(r"[？?。！!,，]", "", user_text).strip()
-    if not item_name: return
+    # 強化版過濾詞
+    filter_words = [
+        "的價格", "的價錢", "賣多少錢", "賣多少", "多少錢", "找一下", 
+        "想知道", "幫我", "搜尋", "查詢", "有沒有", "請問", "價格", 
+        "價錢", "看看", "多少", "想問", "找", "的"
+    ]
+    item_name = user_text
+    for word in filter_words:
+        item_name = item_name.replace(word, "")
+    
+    # 清理剩餘的標點符號與前後空格
+    item_name = re.sub(r"[？?。！!,，]", "", item_name).strip()
+    
+    if not item_name:
+        await update.message.reply_text("請輸入具體的商品名稱喔！")
+        return
     has_auth = os.path.exists('auth.json')
     if has_auth:
         await update.message.reply_text(f"🔑 查詢「{item_name}」會員價...")
