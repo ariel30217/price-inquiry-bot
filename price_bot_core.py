@@ -145,6 +145,21 @@ class InteractiveLogin:
         await self.page.fill("#passwd", password)
         return await self.take_screenshot()
 
+    async def enter_otp(self, otp_code):
+        # momo 的簡訊驗證碼輸入框通常有特定的 ID 或 class
+        # 這裡我們嘗試尋找常見的驗證碼輸入框
+        otp_selectors = ["#otpCode", "input[name='otpCode']", ".otp-input"]
+        for selector in otp_selectors:
+            if await self.page.locator(selector).is_visible():
+                await self.page.fill(selector, otp_code)
+                break
+        
+        # 尋找「確定/驗證」按鈕
+        confirm_btn = self.page.get_by_role("button", name=re.compile("確定|驗證|送出"))
+        await confirm_btn.click()
+        await asyncio.sleep(4)
+        return await self.take_screenshot()
+
     async def click_login(self):
         await self.page.click("#loginBtn")
         await asyncio.sleep(3)
