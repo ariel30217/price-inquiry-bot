@@ -34,7 +34,7 @@ async def get_product_price_with_chrome(item_name, use_auth=False):
         await page.set_viewport_size({"width": 1280, "height": 1000})
         try:
             search_url = f"https://www.momoshop.com.tw/search/searchShop.jsp?keyword={item_name}"
-            await page.set_extra_http_headers({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"})
+            await page.set_extra_http_headers({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/120.0.0.0 Safari/537.36"})
             await page.goto(search_url, wait_until="domcontentloaded", timeout=40000)
             await page.evaluate("window.scrollBy(0, 500)")
             await asyncio.sleep(4)
@@ -86,27 +86,29 @@ class InteractiveLogin:
         return await self.take_screenshot()
 
     async def enter_account(self, account):
-        # 採用最強大的 JS 注入方案，確保值一定會被填入
+        # 採用「順序定位法」：第一個輸入框一定是帳號
         await self.page.evaluate(f"""(val) => {{
-            const el = document.querySelector("input[type='text'], input[name='memId'], #memId, .login-input input");
+            const inputs = Array.from(document.querySelectorAll("input"));
+            const el = inputs.find(i => i.offsetParent !== null); // 找第一個可見的
             if (el) {{
                 el.value = val;
                 el.dispatchEvent(new Event('input', {{ bubbles: true }}));
                 el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
             }}
         }}""", account)
         await asyncio.sleep(1)
         return await self.take_screenshot()
 
     async def enter_password(self, password):
+        # 採用「順序定位法」：第二個輸入框一定是密碼
         await self.page.evaluate(f"""(val) => {{
-            const el = document.querySelector("input[type='password'], #passwd, input[name='passwd']");
-            if (el) {{
+            const inputs = Array.from(document.querySelectorAll("input"));
+            const visibleInputs = inputs.filter(i => i.offsetParent !== null);
+            if (visibleInputs.length >= 2) {{
+                const el = visibleInputs[1]; // 第二個
                 el.value = val;
                 el.dispatchEvent(new Event('input', {{ bubbles: true }}));
                 el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                el.dispatchEvent(new Event('blur', {{ bubbles: true }}));
             }}
         }}""", password)
         await asyncio.sleep(1)
@@ -114,10 +116,11 @@ class InteractiveLogin:
 
     async def click_login(self):
         await self.page.evaluate("""() => {
-            const btn = document.querySelector("#loginBtn, .btn-login, button[type='submit'], .login_btn");
+            const btn = document.querySelector("#loginBtn, .btn-login, button[type='submit'], .login_btn") 
+                        || Array.from(document.querySelectorAll("button")).find(b => b.innerText.includes('登入'));
             if (btn) btn.click();
         }""")
-        await asyncio.sleep(5)
+        await asyncio.sleep(6)
         return await self.take_screenshot()
 
     async def enter_otp(self, code):
