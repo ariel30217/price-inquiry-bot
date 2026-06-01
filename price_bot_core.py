@@ -158,15 +158,31 @@ class InteractiveLogin:
         return await self.take_screenshot()
 
     async def click_login(self):
-        selectors = ["#loginBtn", ".btn-login", "button:has-text('登入')", ".login_btn"]
+        # 嘗試更廣泛的選擇器，並加上強制的 javascript 點擊
+        selectors = [
+            "button:has-text('登入')", 
+            "a:has-text('登入')", 
+            "#loginBtn", 
+            ".btn-login", 
+            ".login_btn",
+            "input[type='submit']"
+        ]
+        clicked = False
         for s in selectors:
             try:
                 btn = self.page.locator(s).first
                 if await btn.is_visible():
-                    await btn.click()
+                    # 嘗試模擬點擊與直接執行 JS 點擊兩種方式
+                    await btn.click(timeout=3000)
+                    clicked = True
                     break
             except: continue
-        await asyncio.sleep(5)
+            
+        if not clicked:
+            # 最後手段：直接按 Enter 鍵
+            await self.page.keyboard.press("Enter")
+        
+        await asyncio.sleep(6) # 登入跳轉通常較慢，多等一下
         return await self.take_screenshot()
 
     async def enter_otp(self, otp_code):
