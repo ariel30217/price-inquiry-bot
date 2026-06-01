@@ -22,139 +22,95 @@ def save_cache(cache):
         json.dump(cache, f, ensure_ascii=False, indent=4)
 
 async def get_product_price_with_chrome(item_name, use_auth=False):
+    """
+    智慧過濾版：精確區分品名與廣告
+    """
     print(f"啟動 momo 搜尋 (模式: {'會員' if use_auth else '訪客'}): {item_name}...")
+    
     async with async_playwright() as p:
+        # 自動判斷環境：如果是在 Docker 或雲端 (環境變數 RENDER 或 CI)，則使用 headless=True
         is_cloud = os.environ.get('RENDER') or os.environ.get('CI') or os.path.exists('/.dockerenv')
         browser = await p.chromium.launch(headless=True if is_cloud else False)
+        
         if use_auth and os.path.exists(AUTH_FILE):
             context = await browser.new_context(storage_state=AUTH_FILE)
         else:
             context = await browser.new_context()
+            
         page = await context.new_page()
         await page.set_viewport_size({"width": 1280, "height": 1000})
+        
         try:
             search_url = f"https://www.momoshop.com.tw/search/searchShop.jsp?keyword={item_name}"
-            await page.set_extra_http_headers({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/120.0.0.0 Safari/537.36"})
             await page.goto(search_url, wait_until="domcontentloaded", timeout=40000)
             await page.evaluate("window.scrollBy(0, 500)")
-            await asyncio.sleep(4)
+            await asyncio.sleep(2.5)
+
+            # --- 改進：品名過濾邏輯 ---
             product_name = item_name
-            name_candidates = page.locator(".prdName, .goodsUrl, .eachGood .name, .productName")
-            if await name_candidates.count() > 0:
-                product_name = (await name_candidates.first.inner_text()).split('\n')[0].strip()
+            name_candidates = page.locator(".prdName, .goodsUrl, .eachGood .name")
+            count = await name_candidates.count()
+            
+            for i in range(min(count, 5)): # 掃描前 5 個標籤
+                candidate_text = await name_candidates.nth(i).inner_text()
+                clean_name = candidate_text.split('\n')[0].strip()
+                
+                # 排除過短的廣告標語 (如: 滿1件折259, 登記送...)
+                # 真正的品名通常會包含至少 5 個中文字以上，且不應該只是折扣公式
+                is_ad = bool(re.search(r"滿.*件.*折| mo點 | % |登記|限時", clean_name))
+                
+                if is_ad and len(clean_name) < 12:
+                    continue # 這是廣告，跳過
+                else:
+                    product_name = clean_name
+                    break
+
+            # --- 改進：價格抓取邏輯 ---
             product_price = "暫時找不到價格"
-            price_selectors = [".prdPrice", ".price", ".money", "b.price", ".total-price"]
-            for s in price_selectors:
-                elem = page.locator(s).first
+            price_selectors = [".prdPrice", ".price", ".money", "b.price"]
+            for selector in price_selectors:
+                elem = page.locator(selector).first
                 if await elem.is_visible():
-                    clean_digits = "".join(re.findall(r'[0-9]+', await elem.inner_text()))
-                    if clean_digits: product_price = f"{clean_digits} 元"; break
+                    raw_price = await elem.inner_text()
+                    # 濾除所有非數字內容，僅保留金額
+                    clean_digits = "".join(re.findall(r'[0-9]+', raw_price))
+                    if clean_digits:
+                        product_price = f"{clean_digits} 元"
+                        break
+
             await browser.close()
-            return f"品名：{product_name}\n{'【會員】' if use_auth else '【訪客】'} 價格：{product_price}"
+            mode_tag = "【會員】" if use_auth else "【訪客】"
+            return f"品名：{product_name}\n{mode_tag} 價格：{product_price}"
+
         except Exception as e:
-            await browser.close(); return f"搜尋失敗: {str(e)[:20]}"
+            await browser.close()
+            return f"搜尋失敗: {str(e)[:20]}"
 
 async def inquiry_price(item_name, use_auth=False):
-    cache = load_cache(); current_time = time.time(); cache_key = f"{'會員' if use_auth else '訪客'}_{item_name}"
+    cache = load_cache()
+    current_time = time.time()
+    mode_key = "會員" if use_auth else "訪客"
+    cache_key = f"{mode_key}_{item_name}"
+    
     if cache_key in cache:
         data = cache[cache_key]
-        if current_time - data['timestamp'] < CACHE_EXPIRY: return data['price'], True
+        if current_time - data['timestamp'] < CACHE_EXPIRY:
+            return data['price'], True
+            
     price = await get_product_price_with_chrome(item_name, use_auth)
-    cache[cache_key] = {"price": price, "timestamp": current_time}; save_cache(cache)
+    cache[cache_key] = {"price": price, "timestamp": current_time}
+    save_cache(cache)
     return price, False
 
 async def login_via_chrome():
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False); context = await browser.new_context(); page = await context.new_page()
+        browser = await p.chromium.launch(headless=False)
+        context = await browser.new_context()
+        page = await context.new_page()
         await page.goto("https://www.momoshop.com.tw/main/Main.jsp")
-        v = asyncio.Event(); page.on("close", lambda _: v.set()); await v.wait()
-        await context.storage_state(path=AUTH_FILE); await browser.close(); return "成功"
-
-class InteractiveLogin:
-    def __init__(self): self.p = None; self.b = None; self.c = None; self.page = None
-
-    async def start(self):
-        self.p = await async_playwright().start()
-        is_cloud = os.environ.get('RENDER') or os.environ.get('CI') or os.path.exists('/.dockerenv')
-        self.b = await self.p.chromium.launch(headless=True if is_cloud else False)
-        self.c = await self.b.new_context(); self.page = await self.c.new_page()
-        await self.page.set_viewport_size({"width": 1280, "height": 800})
-
-    async def goto_login(self):
-        url = "https://app.momoshop.com.tw/api/moecapp/authThird?client_id=TvApp&redirect_uri=https://tv.momoshop.com.tw/mymomo/thirdLogin.momo&preUrl=https://tv.momoshop.com.tw/mymomo/membercenter.momo"
-        await self.page.goto(url, wait_until="load"); await asyncio.sleep(3)
-        return await self.take_screenshot()
-
-    async def enter_account(self, account):
-        # 採用「順序定位法」：第一個輸入框一定是帳號
-        await self.page.evaluate(f"""(val) => {{
-            const inputs = Array.from(document.querySelectorAll("input"));
-            const el = inputs.find(i => i.offsetParent !== null); // 找第一個可見的
-            if (el) {{
-                el.value = val;
-                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-            }}
-        }}""", account)
-        await asyncio.sleep(1)
-        return await self.take_screenshot()
-
-    async def enter_password(self, password):
-        # 採用「順序定位法」：第二個輸入框一定是密碼
-        await self.page.evaluate(f"""(val) => {{
-            const inputs = Array.from(document.querySelectorAll("input"));
-            const visibleInputs = inputs.filter(i => i.offsetParent !== null);
-            if (visibleInputs.length >= 2) {{
-                const el = visibleInputs[1]; // 第二個
-                el.value = val;
-                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-            }}
-        }}""", password)
-        await asyncio.sleep(1)
-        return await self.take_screenshot()
-
-    async def click_login(self):
-        # 1. 優先嘗試 Playwright 的智慧點擊 (尋找寫著「登入」的按鈕)
-        try:
-            login_btn = self.page.get_by_text("登入", exact=True).first
-            if await login_btn.is_visible():
-                await login_btn.click(timeout=3000)
-                print("已透過智慧點擊觸發登入")
-            else:
-                # 2. 備援：使用 JS 尋找所有可能的登入按鈕並點擊
-                await self.page.evaluate("""() => {
-                    const targets = document.querySelectorAll('button, a, div, span, input[type="submit"]');
-                    for (const el of targets) {
-                        if (el.innerText && el.innerText.trim() === '登入' && el.offsetWidth > 0) {
-                            el.click();
-                            return;
-                        }
-                    }
-                }""")
-                print("已透過 JS 尋找並點擊登入")
-        except Exception as e:
-            print(f"點擊嘗試失敗: {e}")
-            # 3. 最後一招：對著輸入框按 Enter 鍵
-            await self.page.keyboard.press("Enter")
-            print("已嘗試按 Enter 鍵送出")
-        
-        # 登入後通常需要較長跳轉時間，特別是如果要收驗證碼
-        await asyncio.sleep(8)
-        return await self.take_screenshot()
-
-    async def enter_otp(self, code):
-        await self.page.evaluate(f"""(val) => {{
-            const el = document.querySelector("#otpCode, input[name='otpCode'], .otp-input");
-            if (el) {{ el.value = val; el.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
-            const btn = document.querySelector("button:contains('確定'), button:contains('驗證')") || document.querySelector("button.btn-pink");
-            if (btn) btn.click();
-        }}""", code)
-        await asyncio.sleep(4)
-        return await self.take_screenshot()
-
-    async def take_screenshot(self):
-        path = "login_step.png"; await self.page.screenshot(path=path); return path
-
-    async def finish(self):
-        await self.c.storage_state(path=AUTH_FILE); await self.b.close(); await self.p.stop()
+        view_closed = asyncio.Event()
+        page.on("close", lambda _: view_closed.set())
+        await view_closed.wait()
+        await context.storage_state(path=AUTH_FILE)
+        await browser.close()
+        return "成功"
