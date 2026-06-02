@@ -283,38 +283,39 @@ class InteractiveLogin:
         await self.page.goto(url, wait_until="load"); await asyncio.sleep(3)
         return await self.take_screenshot()
 
+    async def fill_visible_input(self, index, value, label):
+        inputs = self.page.locator("input:visible")
+        count = await inputs.count()
+        self.log(f"visible inputs count={count} for {label}")
+        if count <= index:
+            raise RuntimeError(f"找不到{label}欄位")
+
+        field = inputs.nth(index)
+        await field.scroll_into_view_if_needed()
+        await field.click()
+        await field.fill("")
+        await field.type(value, delay=35)
+        await field.evaluate("""el => {
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new Event('blur', { bubbles: true }));
+        }""")
+
     async def enter_account(self, account):
         self.log("entering account")
-        await self.page.evaluate(f"""(val) => {{
-            const inputs = Array.from(document.querySelectorAll("input"));
-            const el = inputs.find(i => i.offsetParent !== null);
-            if (el) {{
-                el.value = val;
-                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-            }}
-        }}""", account)
+        await self.fill_visible_input(0, account, "帳號")
         await asyncio.sleep(1)
         return await self.take_screenshot()
 
     async def enter_password(self, password):
         self.log("entering password")
-        await self.page.evaluate(f"""(val) => {{
-            const inputs = Array.from(document.querySelectorAll("input"));
-            const visibleInputs = inputs.filter(i => i.offsetParent !== null);
-            if (visibleInputs.length >= 2) {{
-                const el = visibleInputs[1];
-                el.value = val;
-                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
-            }}
-        }}""", password)
+        await self.fill_visible_input(1, password, "密碼")
         await asyncio.sleep(1)
         return await self.take_screenshot()
 
     async def click_login(self):
         self.log("clicking login button")
-        clicked = await self.page.evaluate("""() => {
+        target = await self.page.evaluate("""() => {
             const isVisible = (el) => {
                 const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
@@ -368,18 +369,22 @@ class InteractiveLogin:
             }
 
             btn.scrollIntoView({ block: "center", inline: "center" });
-            btn.click();
+            const rect = btn.getBoundingClientRect();
             return {
                 clicked: true,
                 tag: btn.tagName,
                 id: btn.id || "",
                 className: String(btn.className || ""),
-                label: labelOf(btn).slice(0, 80)
+                label: labelOf(btn).slice(0, 80),
+                x: rect.left + rect.width / 2,
+                y: rect.top + rect.height / 2
             };
         }""")
-        self.log(f"login click result={clicked}")
-        if not clicked.get("clicked"):
-            raise RuntimeError(f"找不到登入按鈕，候選元素: {clicked.get('candidates')}")
+        self.log(f"login click target={target}")
+        if not target.get("clicked"):
+            raise RuntimeError(f"找不到登入按鈕，候選元素: {target.get('candidates')}")
+        await self.page.mouse.click(target["x"], target["y"])
+        await self.page.keyboard.press("Enter")
         self.log("login button clicked, waiting for page response")
         await asyncio.sleep(8)
         self.log("capturing post-login screenshot")
