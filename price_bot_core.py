@@ -5,10 +5,61 @@ import json
 import os
 import asyncio
 import re
+from urllib.parse import quote_plus
 
 CACHE_FILE = 'price_cache.json'
 CACHE_EXPIRY = 3600
 AUTH_FILE = 'auth.json'
+
+def clean_product_name(text):
+    if not text:
+        return ""
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return ""
+
+    skip_patterns = [
+        r"^https?://",
+        r"滿.*件.*折",
+        r"登記",
+        r"限時",
+        r"折價券",
+        r"mo幣",
+        r"mo點",
+        r"回饋",
+        r"刷卡",
+        r"免運",
+        r"熱銷",
+        r"排行",
+    ]
+
+    for line in lines:
+        clean = re.sub(r"\s+", " ", line).strip()
+        if len(clean) < 3:
+            continue
+        if re.fullmatch(r"[\d,]+", clean):
+            continue
+        if any(re.search(pattern, clean, re.IGNORECASE) for pattern in skip_patterns):
+            continue
+        return clean
+
+    return re.sub(r"\s+", " ", lines[0]).strip()
+
+def clean_product_price(text):
+    if not text:
+        return ""
+
+    matches = re.findall(r"[0-9][0-9,]*", text)
+    if not matches:
+        return ""
+
+    numbers = [int(match.replace(",", "")) for match in matches if match.replace(",", "").isdigit()]
+    valid_numbers = [number for number in numbers if number > 0]
+    if not valid_numbers:
+        return ""
+
+    return f"{valid_numbers[0]} 元"
 
 def load_cache():
     if os.path.exists(CACHE_FILE):
@@ -46,23 +97,118 @@ async def get_product_price_with_chrome(item_name, use_auth=False):
         
         await page.set_viewport_size({"width": 1280, "height": 1000})
         try:
-            search_url = f"https://www.momoshop.com.tw/search/searchShop.jsp?keyword={item_name}"
+            search_url = f"https://www.momoshop.com.tw/search/searchShop.jsp?keyword={quote_plus(item_name)}"
             await page.goto(search_url, wait_until="domcontentloaded", timeout=40000)
             await page.evaluate("window.scrollBy(0, 500)")
             await asyncio.sleep(4)
-            
+
             product_name = item_name
-            name_candidates = page.locator(".prdName, .goodsUrl, .eachGood .name, .productName")
-            if await name_candidates.count() > 0:
-                product_name = (await name_candidates.first.inner_text()).split('\n')[0].strip()
-            
             product_price = "暫時找不到價格"
-            price_selectors = [".prdPrice", ".price", ".money", "b.price", ".total-price"]
-            for s in price_selectors:
-                elem = page.locator(s).first
-                if await elem.is_visible():
-                    clean_digits = "".join(re.findall(r'[0-9]+', await elem.inner_text()))
-                    if clean_digits: product_price = f"{clean_digits} 元"; break
+
+            products = await page.evaluate("""() => {
+                const isVisible = (el) => {
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.display !== "none"
+                        && style.visibility !== "hidden"
+                        && rect.width > 0
+                        && rect.height > 0;
+                };
+                const textOf = (el) => (el ? (el.innerText || el.textContent || "").trim() : "");
+                const containerSelectors = [
+                    "li.goodsItemLi",
+                    "li.goodsItem",
+                    ".goodsItemLi",
+                    ".goodsItem",
+                    ".eachGood",
+                    ".prdListArea li",
+                    ".searchPrdList li",
+                    "ul.listArea li",
+                    "li"
+                ];
+                const nameSelectors = [
+                    ".prdName",
+                    ".goodsName",
+                    ".goodsUrl",
+                    ".name",
+                    ".productName",
+                    "a[title]",
+                    "h3",
+                    "h4"
+                ];
+                const priceSelectors = [
+                    ".prdPrice",
+                    ".price",
+                    ".money",
+                    "b.price",
+                    ".total-price",
+                    ".specialPrice",
+                    ".salePrice"
+                ];
+
+                const seen = new Set();
+                const results = [];
+
+                for (const containerSelector of containerSelectors) {
+                    for (const container of document.querySelectorAll(containerSelector)) {
+                        if (!isVisible(container) || seen.has(container)) continue;
+                        seen.add(container);
+
+                        const nameEl = nameSelectors
+                            .flatMap(selector => Array.from(container.querySelectorAll(selector)))
+                            .find(isVisible);
+                        const priceEl = priceSelectors
+                            .flatMap(selector => Array.from(container.querySelectorAll(selector)))
+                            .find(isVisible);
+
+                        const name = textOf(nameEl) || container.getAttribute("title") || "";
+                        const price = textOf(priceEl);
+                        const fullText = textOf(container);
+
+                        if (name || price) {
+                            results.push({ name, price, fullText });
+                        }
+                    }
+                    if (results.length >= 10) break;
+                }
+
+                if (!results.length) {
+                    const names = [".prdName", ".goodsUrl", ".eachGood .name", ".productName", ".goodsName"]
+                        .flatMap(selector => Array.from(document.querySelectorAll(selector)))
+                        .filter(isVisible)
+                        .slice(0, 10)
+                        .map(el => ({ name: textOf(el), price: "", fullText: textOf(el) }));
+                    return names;
+                }
+
+                return results.slice(0, 10);
+            }""")
+
+            product_candidates = []
+            for product in products:
+                candidate_name = clean_product_name(product.get("name") or product.get("fullText"))
+                candidate_price = clean_product_price(product.get("price") or product.get("fullText"))
+                if candidate_name:
+                    product_candidates.append((candidate_name, candidate_price))
+
+            selected_product = next(
+                ((name, price) for name, price in product_candidates if name and price),
+                product_candidates[0] if product_candidates else None
+            )
+            if selected_product:
+                product_name, selected_price = selected_product
+                if selected_price:
+                    product_price = selected_price
+
+            if product_price == "暫時找不到價格":
+                price_selectors = [".prdPrice", ".price", ".money", "b.price", ".total-price", ".specialPrice", ".salePrice"]
+                for s in price_selectors:
+                    elem = page.locator(s).first
+                    if await elem.is_visible():
+                        cleaned_price = clean_product_price(await elem.inner_text())
+                        if cleaned_price:
+                            product_price = cleaned_price
+                            break
             
             await browser.close()
             return f"品名：{product_name}\n{'【會員】' if use_auth else '【訪客】'} 價格：{product_price}"
