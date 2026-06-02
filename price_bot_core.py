@@ -78,6 +78,23 @@ async def inquiry_price(item_name, use_auth=False):
     cache[cache_key] = {"price": price, "timestamp": current_time}; save_cache(cache)
     return price, False
 
+async def login_via_chrome():
+    is_cloud = os.environ.get('RENDER') or os.environ.get('CI') or os.path.exists('/.dockerenv')
+    if is_cloud:
+        raise RuntimeError("雲端環境無法開啟互動式登入視窗，請改用本機產生 auth.json 後上傳。")
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=False)
+        context = await browser.new_context()
+        page = await context.new_page()
+        await page.goto("https://www.momoshop.com.tw/main/Main.jsp")
+        view_closed = asyncio.Event()
+        page.on("close", lambda _: view_closed.set())
+        await view_closed.wait()
+        await context.storage_state(path=AUTH_FILE)
+        await browser.close()
+        return "成功"
+
 class InteractiveLogin:
     def __init__(self): self.p = None; self.b = None; self.c = None; self.page = None
 
