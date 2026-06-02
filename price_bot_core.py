@@ -105,6 +105,7 @@ async def inquiry_price(item_name, use_auth=False):
     if cache_key in cache:
         data = cache[cache_key]
         if current_time - data['timestamp'] < CACHE_EXPIRY:
+            print(f"⚡️ 快取命中: {cache_key}")
             return data['price'], True
             
     price = await get_product_price_with_chrome(item_name, use_auth)

@@ -52,7 +52,7 @@ async def wait_for_auth_and_search(update, item_name):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     item_name = re.sub(r"[？?。！!,，]", "", user_text).strip()
-    filter_words = ["的價格", "的價錢", "賣多少錢", "賣多少", "多少錢", "想知道", "幫我", "搜尋", "查詢", "價格", "價錢", "看看", "多少", "想問", "找", "的"]
+    filter_words = ["請問", "的價格", "的價錢", "賣多少錢", "賣多少", "多少錢", "想知道", "幫我", "搜尋", "查詢", "價格", "價錢", "看看", "多少", "想問", "找", "的"]
     for word in filter_words: item_name = item_name.replace(word, "")
     item_name = item_name.strip()
     if not item_name: return
