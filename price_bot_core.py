@@ -170,7 +170,9 @@ class InteractiveLogin:
         await self.page.evaluate(f"""(val) => {{
             const el = document.querySelector("#otpCode, input[name='otpCode'], .otp-input");
             if (el) {{ el.value = val; el.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
-            const btn = document.querySelector("button:contains('確定'), button:contains('驗證')") || document.querySelector("button.btn-pink");
+            const btn = Array.from(document.querySelectorAll("button, input[type='button'], input[type='submit']"))
+                .find(b => (b.innerText || b.value || "").includes("確定") || (b.innerText || b.value || "").includes("驗證"))
+                || document.querySelector("button.btn-pink");
             if (btn) btn.click();
         }}""", code)
         await asyncio.sleep(4)
@@ -179,7 +181,12 @@ class InteractiveLogin:
     async def take_screenshot(self):
         path = "login_step.png"; await self.page.screenshot(path=path); return path
 
-    async def finish(self):
-        try: await self.c.storage_state(path=AUTH_FILE)
+    async def finish(self, save_auth=True):
+        try:
+            if save_auth:
+                await self.c.storage_state(path=AUTH_FILE)
         except: pass
-        await self.b.close(); await self.p.stop()
+        if self.b:
+            await self.b.close()
+        if self.p:
+            await self.p.stop()
