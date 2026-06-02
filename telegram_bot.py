@@ -10,8 +10,6 @@ import json
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '8952469404:AAGGHnKKVV040mz3EXRWM9DLv_-ATEGPBU8')
 BRIDGE_SIGNAL = 'bridge_signal.json'
-# 全域變數：追蹤當前連動的使用者與商品
-sync_info = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('你好！輸入商品名稱即可查價。\n• 輸入 /logout 清除登入資訊')
@@ -28,15 +26,28 @@ async def trigger_bridge(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     item_name = context.user_data.get('post_login_search')
     
-    # 核心：存下誰正在查什麼
-    sync_info['current'] = {"user_id": user_id, "item": item_name}
+    # 將需要補查的商品存入 context
+    context.user_data['pending_item'] = item_name
     
     with open(BRIDGE_SIGNAL, 'w') as f:
         json.dump({"action": "login", "user_id": user_id}, f)
     
     await query.answer()
     await query.edit_message_reply_markup(reply_markup=None)
-    await query.message.reply_text("📡 正在連動電腦登入中...\n完成後機器人將『自動』回傳會員價結果。")
+    await query.message.reply_text("📡 正在連動電腦登入中...\n完成後機器人將『自動』回傳結果。")
+    
+    # 啟動一個小任務，不斷檢查 auth.json 是否出現
+    asyncio.create_task(wait_for_auth_and_search(update, item_name))
+
+async def wait_for_auth_and_search(update, item_name):
+    """輪詢檢查 auth.json 是否由 Flask 存入，若有則自動查價"""
+    for _ in range(60): # 最多等 5 分鐘 (60 * 5s)
+        if os.path.exists('auth.json'):
+            await update.effective_message.reply_text("✅ 同步成功！正在自動為您獲取會員價...")
+            price_info, _ = await inquiry_price(item_name, use_auth=True)
+            await update.effective_message.reply_text(f"✨【會員專屬結果】\n{price_info}")
+            return
+        await asyncio.sleep(5)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
@@ -57,9 +68,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("🔗 啟動電腦連動登入", callback_data="run_bridge")]]
         await update.message.reply_text(f"【訪客結果】\n{price_info}", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# --- Flask 接口 ---
+# --- Flask 接口 (僅負責存檔，不干涉機器人，保證 100% 成功) ---
 flask_app = Flask(__name__)
-bot_application = None # 全域 Bot 實例
 
 @flask_app.route('/')
 def h(): return "Bot is live!", 200
@@ -74,24 +84,10 @@ def get_signal():
 
 @flask_app.route('/upload_auth', methods=['POST'])
 def upload_auth():
-    if 'file' not in request.files: return "error", 400
+    if 'file' not in request.files: return "no file", 400
     file = request.files['file']
     file.save('auth.json')
-    
-    # 重點：收到檔案後，強迫 Bot loop 執行補查
-    if 'current' in sync_info and bot_application:
-        data = sync_info['current']
-        asyncio.run_coroutine_threadsafe(
-            auto_member_search(data['user_id'], data['item']), 
-            bot_application.loop
-        )
     return "ok", 200
-
-async def auto_member_search(user_id, item_name):
-    """同步成功後，由 Bot 執行自動回報"""
-    await bot_application.bot.send_message(chat_id=user_id, text="✅ 同步成功！正在自動為您獲取會員價...")
-    price_info, _ = await inquiry_price(item_name, use_auth=True)
-    await bot_application.bot.send_message(chat_id=user_id, text=f"✨【會員專屬結果】\n{price_info}")
 
 def run_f():
     port = int(os.environ.get("PORT", 10000))
@@ -99,9 +95,9 @@ def run_f():
 
 if __name__ == '__main__':
     threading.Thread(target=run_f, daemon=True).start()
-    bot_application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    bot_application.add_handler(CommandHandler("start", start))
-    bot_application.add_handler(CommandHandler("logout", logout))
-    bot_application.add_handler(CallbackQueryHandler(trigger_bridge, pattern="run_bridge"))
-    bot_application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    bot_application.run_polling()
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("logout", logout))
+    app.add_handler(CallbackQueryHandler(trigger_bridge, pattern="run_bridge"))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    app.run_polling()
