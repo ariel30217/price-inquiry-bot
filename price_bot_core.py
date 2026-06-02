@@ -242,7 +242,7 @@ async def login_via_chrome():
         return "成功"
 
 class InteractiveLogin:
-    def __init__(self): self.p = None; self.b = None; self.c = None; self.page = None
+    def __init__(self): self.p = None; self.b = None; self.c = None; self.page = None; self.login_frame = None
 
     def log(self, message):
         print(f"[login] {message}", flush=True)
@@ -264,7 +264,10 @@ class InteractiveLogin:
             
         self.log(f"launching chromium headless={launch_kwargs.get('headless')}")
         self.b = await self.p.chromium.launch(**launch_kwargs)
-        self.c = await self.b.new_context()
+        self.c = await self.b.new_context(
+            viewport={"width": 390, "height": 844},
+            user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        )
         self.page = await self.c.new_page()
         
         # 啟用隱身術
@@ -274,23 +277,47 @@ class InteractiveLogin:
         if proxy_server:
             await self.page.route("**/*.{png,jpg,jpeg,gif,webp}", lambda route: route.abort())
             
-        await self.page.set_viewport_size({"width": 1280, "height": 800})
+        await self.page.set_viewport_size({"width": 390, "height": 844})
         self.log("browser ready")
 
     async def goto_login(self):
         self.log("opening momo login page")
-        url = "https://app.momoshop.com.tw/api/moecapp/authThird?client_id=TvApp&redirect_uri=https://tv.momoshop.com.tw/mymomo/thirdLogin.momo&preUrl=https://tv.momoshop.com.tw/mymomo/membercenter.momo"
-        await self.page.goto(url, wait_until="load"); await asyncio.sleep(3)
+        url = "https://m.momoshop.com.tw/mymomo/login.momo?preUrl=/mymomo/wishList.momo"
+        await self.page.goto(url, wait_until="domcontentloaded", timeout=40000)
+        await asyncio.sleep(3)
+        self.login_frame = next(
+            (frame for frame in self.page.frames if "account.momoshop.com.tw/mobile" in frame.url),
+            None
+        )
+        self.log(f"login frame url={self.login_frame.url if self.login_frame else 'not found'}")
         return await self.take_screenshot()
 
+    def active_login_frame(self):
+        if self.login_frame:
+            return self.login_frame
+        frame = next(
+            (frame for frame in self.page.frames if "account.momoshop.com.tw/mobile" in frame.url),
+            None
+        )
+        self.login_frame = frame
+        return frame or self.page
+
     async def fill_visible_input(self, index, value, label):
-        inputs = self.page.locator("input:visible")
-        count = await inputs.count()
-        self.log(f"visible inputs count={count} for {label}")
-        if count <= index:
+        frame = self.active_login_frame()
+        field = frame.locator(f".inputOrder{index}").first
+        if await field.count() < 1:
+            inputs = frame.locator("input")
+            count = await inputs.count()
+            self.log(f"fallback inputs count={count} for {label}")
+            if count <= index:
+                raise RuntimeError(f"找不到{label}欄位")
+            field = inputs.nth(index)
+        else:
+            self.log(f"matched .inputOrder{index} for {label}")
+
+        if await field.count() < 1:
             raise RuntimeError(f"找不到{label}欄位")
 
-        field = inputs.nth(index)
         await field.scroll_into_view_if_needed()
         await field.click()
         await field.fill("")
@@ -315,7 +342,8 @@ class InteractiveLogin:
 
     async def click_login(self):
         self.log("clicking login button")
-        target = await self.page.evaluate("""() => {
+        frame = self.active_login_frame()
+        target = await frame.evaluate("""() => {
             const isVisible = (el) => {
                 const style = window.getComputedStyle(el);
                 const rect = el.getBoundingClientRect();
@@ -383,7 +411,14 @@ class InteractiveLogin:
         self.log(f"login click target={target}")
         if not target.get("clicked"):
             raise RuntimeError(f"找不到登入按鈕，候選元素: {target.get('candidates')}")
-        await self.page.mouse.click(target["x"], target["y"])
+        if frame == self.page:
+            await self.page.mouse.click(target["x"], target["y"])
+        else:
+            frame_element = await frame.frame_element()
+            frame_box = await frame_element.bounding_box()
+            if not frame_box:
+                raise RuntimeError("找不到登入 iframe 位置")
+            await self.page.mouse.click(frame_box["x"] + target["x"], frame_box["y"] + target["y"])
         await self.page.keyboard.press("Enter")
         self.log("login button clicked, waiting for page response")
         await asyncio.sleep(8)
