@@ -1,4 +1,5 @@
 from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
 import time
 import json
 import os
@@ -22,107 +23,146 @@ def save_cache(cache):
         json.dump(cache, f, ensure_ascii=False, indent=4)
 
 async def get_product_price_with_chrome(item_name, use_auth=False):
-    """
-    強化版爬蟲：精準過濾品名並模擬真實瀏覽器行為
-    """
     print(f"啟動 momo 搜尋 (模式: {'會員' if use_auth else '訪客'}): {item_name}...")
-    
     async with async_playwright() as p:
         is_cloud = os.environ.get('RENDER') or os.environ.get('CI') or os.path.exists('/.dockerenv')
-        browser = await p.chromium.launch(headless=True if is_cloud else False)
         
-        # 載入登入狀態 (若有)
-        if use_auth and os.path.exists(AUTH_FILE):
-            context = await browser.new_context(storage_state=AUTH_FILE)
-        else:
-            context = await browser.new_context()
-            
+        # 預留 Proxy 支援
+        proxy_server = os.environ.get('PROXY_SERVER')
+        launch_kwargs = {"headless": True if is_cloud else False}
+        if proxy_server:
+            launch_kwargs["proxy"] = {
+                "server": proxy_server,
+                "username": os.environ.get('PROXY_USER'),
+                "password": os.environ.get('PROXY_PASS')
+            }
+        
+        browser = await p.chromium.launch(**launch_kwargs)
+        context = await browser.new_context(storage_state=AUTH_FILE if use_auth and os.path.exists(AUTH_FILE) else None)
         page = await context.new_page()
+        
+        # 啟用隱身術 (Stealth)
+        await stealth_async(page)
+        
         await page.set_viewport_size({"width": 1280, "height": 1000})
-        
-        # 設定偽裝 Header
-        await page.set_extra_http_headers({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        })
-        
         try:
             search_url = f"https://www.momoshop.com.tw/search/searchShop.jsp?keyword={item_name}"
             await page.goto(search_url, wait_until="domcontentloaded", timeout=40000)
             await page.evaluate("window.scrollBy(0, 500)")
-            await asyncio.sleep(3.5) # 確保 AJAX 載入
-
-            # --- 強化版：品名過濾邏輯 ---
-            product_name = item_name
-            # momo 常見的品名標籤
-            name_selectors = [".prdName", ".goodsUrl", ".eachGood .name", "h3.name"]
-            found_name = False
+            await asyncio.sleep(4)
             
-            for selector in name_selectors:
-                candidates = page.locator(selector)
-                count = await candidates.count()
-                for i in range(min(count, 5)):
-                    text = await candidates.nth(i).inner_text()
-                    clean_text = text.split('\n')[0].strip()
-                    
-                    # 排除廣告標語
-                    is_ad = bool(re.search(r"滿.*件.*折| mo點 | % |登記|限時|贈品", clean_text))
-                    if not is_ad and len(clean_text) > 4:
-                        product_name = clean_text
-                        found_name = True
-                        break
-                if found_name: break
-
-            # --- 強化版：價格抓取邏輯 ---
+            product_name = item_name
+            name_candidates = page.locator(".prdName, .goodsUrl, .eachGood .name, .productName")
+            if await name_candidates.count() > 0:
+                product_name = (await name_candidates.first.inner_text()).split('\n')[0].strip()
+            
             product_price = "暫時找不到價格"
-            price_selectors = [".prdPrice", ".price", ".money", "b.price", ".total-price", ".eachGood .price"]
-            for selector in price_selectors:
-                elements = page.locator(selector)
-                count = await elements.count()
-                for i in range(count):
-                    elem = elements.nth(i)
-                    if await elem.is_visible():
-                        raw_price = await elem.inner_text()
-                        clean_digits = "".join(re.findall(r'[0-9]+', raw_price))
-                        if clean_digits and int(clean_digits) > 0:
-                            product_price = f"{clean_digits} 元"
-                            break
-                if product_price != "暫時找不到價格": break
-
+            price_selectors = [".prdPrice", ".price", ".money", "b.price", ".total-price"]
+            for s in price_selectors:
+                elem = page.locator(s).first
+                if await elem.is_visible():
+                    clean_digits = "".join(re.findall(r'[0-9]+', await elem.inner_text()))
+                    if clean_digits: product_price = f"{clean_digits} 元"; break
+            
             await browser.close()
-            mode_tag = "【會員】" if use_auth else "【訪客】"
-            return f"品名：{product_name}\n{mode_tag} 價格：{product_price}"
-
+            return f"品名：{product_name}\n{'【會員】' if use_auth else '【訪客】'} 價格：{product_price}"
         except Exception as e:
-            try: await browser.close()
-            except: pass
-            return f"搜尋失敗: {str(e)[:20]}"
+            await browser.close(); return f"搜尋失敗: {str(e)[:20]}"
 
 async def inquiry_price(item_name, use_auth=False):
-    cache = load_cache()
-    current_time = time.time()
-    mode_key = "會員" if use_auth else "訪客"
-    cache_key = f"{mode_key}_{item_name}"
-    
+    cache = load_cache(); current_time = time.time(); cache_key = f"{'會員' if use_auth else '訪客'}_{item_name}"
     if cache_key in cache:
         data = cache[cache_key]
-        if current_time - data['timestamp'] < CACHE_EXPIRY:
-            return data['price'], True
-            
+        if current_time - data['timestamp'] < CACHE_EXPIRY: return data['price'], True
     price = await get_product_price_with_chrome(item_name, use_auth)
-    cache[cache_key] = {"price": price, "timestamp": current_time}
-    save_cache(cache)
+    cache[cache_key] = {"price": price, "timestamp": current_time}; save_cache(cache)
     return price, False
 
-async def login_via_chrome():
-    """本地登入工具：由 local_login.py 調用"""
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
-        context = await browser.new_context()
-        page = await context.new_page()
-        await page.goto("https://www.momoshop.com.tw/main/Main.jsp")
-        view_closed = asyncio.Event()
-        page.on("close", lambda _: view_closed.set())
-        await view_closed.wait()
-        await context.storage_state(path=AUTH_FILE)
-        await browser.close()
-        return "成功"
+class InteractiveLogin:
+    def __init__(self): self.p = None; self.b = None; self.c = None; self.page = None
+
+    async def start(self):
+        self.p = await async_playwright().start()
+        is_cloud = os.environ.get('RENDER') or os.environ.get('CI') or os.path.exists('/.dockerenv')
+        
+        # 實驗分支：強制啟用 Stealth 與 預留 Proxy
+        proxy_server = os.environ.get('PROXY_SERVER')
+        launch_kwargs = {"headless": True if is_cloud else False}
+        if proxy_server:
+            launch_kwargs["proxy"] = {
+                "server": proxy_server,
+                "username": os.environ.get('PROXY_USER'),
+                "password": os.environ.get('PROXY_PASS')
+            }
+            
+        self.b = await self.p.chromium.launch(**launch_kwargs)
+        self.c = await self.b.new_context()
+        self.page = await self.c.new_page()
+        
+        # 啟用隱身術
+        await stealth_async(self.page)
+        
+        # 流量優化：如果不使用 Proxy，可以載入圖片；如果使用 Proxy，則阻擋圖片省流量
+        if proxy_server:
+            await self.page.route("**/*.{png,jpg,jpeg,gif,webp}", lambda route: route.abort())
+            
+        await self.page.set_viewport_size({"width": 1280, "height": 800})
+
+    async def goto_login(self):
+        url = "https://app.momoshop.com.tw/api/moecapp/authThird?client_id=TvApp&redirect_uri=https://tv.momoshop.com.tw/mymomo/thirdLogin.momo&preUrl=https://tv.momoshop.com.tw/mymomo/membercenter.momo"
+        await self.page.goto(url, wait_until="load"); await asyncio.sleep(3)
+        return await self.take_screenshot()
+
+    async def enter_account(self, account):
+        await self.page.evaluate(f"""(val) => {{
+            const inputs = Array.from(document.querySelectorAll("input"));
+            const el = inputs.find(i => i.offsetParent !== null);
+            if (el) {{
+                el.value = val;
+                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            }}
+        }}""", account)
+        await asyncio.sleep(1)
+        return await self.take_screenshot()
+
+    async def enter_password(self, password):
+        await self.page.evaluate(f"""(val) => {{
+            const inputs = Array.from(document.querySelectorAll("input"));
+            const visibleInputs = inputs.filter(i => i.offsetParent !== null);
+            if (visibleInputs.length >= 2) {{
+                const el = visibleInputs[1];
+                el.value = val;
+                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            }}
+        }}""", password)
+        await asyncio.sleep(1)
+        return await self.take_screenshot()
+
+    async def click_login(self):
+        await self.page.evaluate("""() => {
+            const btn = document.querySelector("#loginBtn, .btn-login, button[type='submit'], .login_btn") 
+                        || Array.from(document.querySelectorAll("button")).find(b => b.innerText.includes('登入'));
+            if (btn) btn.click();
+        }""")
+        await asyncio.sleep(8)
+        return await self.take_screenshot()
+
+    async def enter_otp(self, code):
+        await self.page.evaluate(f"""(val) => {{
+            const el = document.querySelector("#otpCode, input[name='otpCode'], .otp-input");
+            if (el) {{ el.value = val; el.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
+            const btn = document.querySelector("button:contains('確定'), button:contains('驗證')") || document.querySelector("button.btn-pink");
+            if (btn) btn.click();
+        }}""", code)
+        await asyncio.sleep(4)
+        return await self.take_screenshot()
+
+    async def take_screenshot(self):
+        path = "login_step.png"; await self.page.screenshot(path=path); return path
+
+    async def finish(self):
+        try: await self.c.storage_state(path=AUTH_FILE)
+        except: pass
+        await self.b.close(); await self.p.stop()
