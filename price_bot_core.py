@@ -98,7 +98,11 @@ async def login_via_chrome():
 class InteractiveLogin:
     def __init__(self): self.p = None; self.b = None; self.c = None; self.page = None
 
+    def log(self, message):
+        print(f"[login] {message}", flush=True)
+
     async def start(self):
+        self.log("starting playwright")
         self.p = await async_playwright().start()
         is_cloud = os.environ.get('RENDER') or os.environ.get('CI') or os.path.exists('/.dockerenv')
         
@@ -112,6 +116,7 @@ class InteractiveLogin:
                 "password": os.environ.get('PROXY_PASS')
             }
             
+        self.log(f"launching chromium headless={launch_kwargs.get('headless')}")
         self.b = await self.p.chromium.launch(**launch_kwargs)
         self.c = await self.b.new_context()
         self.page = await self.c.new_page()
@@ -124,13 +129,16 @@ class InteractiveLogin:
             await self.page.route("**/*.{png,jpg,jpeg,gif,webp}", lambda route: route.abort())
             
         await self.page.set_viewport_size({"width": 1280, "height": 800})
+        self.log("browser ready")
 
     async def goto_login(self):
+        self.log("opening momo login page")
         url = "https://app.momoshop.com.tw/api/moecapp/authThird?client_id=TvApp&redirect_uri=https://tv.momoshop.com.tw/mymomo/thirdLogin.momo&preUrl=https://tv.momoshop.com.tw/mymomo/membercenter.momo"
         await self.page.goto(url, wait_until="load"); await asyncio.sleep(3)
         return await self.take_screenshot()
 
     async def enter_account(self, account):
+        self.log("entering account")
         await self.page.evaluate(f"""(val) => {{
             const inputs = Array.from(document.querySelectorAll("input"));
             const el = inputs.find(i => i.offsetParent !== null);
@@ -144,6 +152,7 @@ class InteractiveLogin:
         return await self.take_screenshot()
 
     async def enter_password(self, password):
+        self.log("entering password")
         await self.page.evaluate(f"""(val) => {{
             const inputs = Array.from(document.querySelectorAll("input"));
             const visibleInputs = inputs.filter(i => i.offsetParent !== null);
@@ -158,15 +167,23 @@ class InteractiveLogin:
         return await self.take_screenshot()
 
     async def click_login(self):
-        await self.page.evaluate("""() => {
+        self.log("clicking login button")
+        clicked = await self.page.evaluate("""() => {
             const btn = document.querySelector("#loginBtn, .btn-login, button[type='submit'], .login_btn") 
                         || Array.from(document.querySelectorAll("button")).find(b => b.innerText.includes('登入'));
-            if (btn) btn.click();
+            if (!btn) return false;
+            btn.click();
+            return true;
         }""")
+        if not clicked:
+            raise RuntimeError("找不到登入按鈕")
+        self.log("login button clicked, waiting for page response")
         await asyncio.sleep(8)
+        self.log("capturing post-login screenshot")
         return await self.take_screenshot()
 
     async def enter_otp(self, code):
+        self.log("entering otp")
         await self.page.evaluate(f"""(val) => {{
             const el = document.querySelector("#otpCode, input[name='otpCode'], .otp-input");
             if (el) {{ el.value = val; el.dispatchEvent(new Event('input', {{ bubbles: true }})); }}
@@ -179,9 +196,11 @@ class InteractiveLogin:
         return await self.take_screenshot()
 
     async def take_screenshot(self):
-        path = "login_step.png"; await self.page.screenshot(path=path); return path
+        self.log("taking screenshot")
+        path = "login_step.png"; await self.page.screenshot(path=path, timeout=15000); return path
 
     async def finish(self, save_auth=True):
+        self.log(f"finishing login session save_auth={save_auth}")
         try:
             if save_auth:
                 await self.c.storage_state(path=AUTH_FILE)

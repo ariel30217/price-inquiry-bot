@@ -4,6 +4,7 @@ import asyncio
 from price_bot_core import inquiry_price, InteractiveLogin
 import os
 import re
+import time
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '8952469404:AAGGHnKKVV040mz3EXRWM9DLv_-ATEGPBU8')
 
@@ -14,9 +15,17 @@ async def send_login_screenshot(update: Update, path: str, caption: str):
     with open(path, 'rb') as image:
         await update.effective_message.reply_photo(photo=image, caption=caption)
 
+def set_login_status(context: ContextTypes.DEFAULT_TYPE, stage: str, status: str):
+    context.user_data['login_stage'] = stage
+    context.user_data['login_status'] = status
+    context.user_data['login_status_at'] = time.strftime('%H:%M:%S')
+    print(f"[telegram-login] stage={stage} status={status}", flush=True)
+
 async def cleanup_login_session(context: ContextTypes.DEFAULT_TYPE):
     login = context.user_data.pop('login_session', None)
     context.user_data.pop('login_stage', None)
+    context.user_data.pop('login_status', None)
+    context.user_data.pop('login_status_at', None)
     context.user_data.pop('pending_item', None)
     if login:
         try:
@@ -28,14 +37,17 @@ async def begin_cloud_login(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     await cleanup_login_session(context)
     login = InteractiveLogin()
     context.user_data['login_session'] = login
-    context.user_data['login_stage'] = 'account'
+    set_login_status(context, 'starting', '準備開啟 momo 登入頁')
     if item_name:
         context.user_data['pending_item'] = item_name
 
     try:
         await update.effective_message.reply_text("正在開啟 momo 登入頁...")
+        set_login_status(context, 'starting', '啟動雲端瀏覽器')
         await login.start()
+        set_login_status(context, 'starting', '載入 momo 登入頁')
         screenshot = await login.goto_login()
+        set_login_status(context, 'account', '等待輸入 momo 帳號')
         await send_login_screenshot(update, screenshot, "請輸入 momo 帳號。")
     except Exception as e:
         await cleanup_login_session(context)
@@ -56,6 +68,24 @@ async def cancel_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await cleanup_login_session(context)
     await update.message.reply_text("已取消登入流程。")
 
+async def login_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data.get('login_session'):
+        await update.message.reply_text("目前沒有進行中的雲端登入流程。")
+        return
+
+    stage = context.user_data.get('login_stage', 'unknown')
+    status = context.user_data.get('login_status', '尚未記錄狀態')
+    status_at = context.user_data.get('login_status_at', '-')
+    pending_item = context.user_data.get('pending_item')
+    lines = [
+        f"登入階段：{stage}",
+        f"目前狀態：{status}",
+        f"更新時間：{status_at}",
+    ]
+    if pending_item:
+        lines.append(f"登入後查詢：{pending_item}")
+    await update.message.reply_text("\n".join(lines))
+
 async def finish_login_and_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     login = context.user_data.get('login_session')
     if not login:
@@ -63,6 +93,7 @@ async def finish_login_and_search(update: Update, context: ContextTypes.DEFAULT_
         return
 
     try:
+        set_login_status(context, 'saving', '保存 auth.json')
         await login.finish()
         context.user_data.pop('login_session', None)
         context.user_data.pop('login_stage', None)
@@ -70,6 +101,7 @@ async def finish_login_and_search(update: Update, context: ContextTypes.DEFAULT_
         await update.effective_message.reply_text("✅ 登入資訊已保存。")
 
         if item_name:
+            set_login_status(context, 'searching', f'查詢會員價：{item_name}')
             await update.effective_message.reply_text(f"正在查詢「{item_name}」的會員價...")
             price_info, is_cached = await inquiry_price(item_name, use_auth=True)
             response = f"✨【會員專屬結果】\n{price_info}\n(您可以對照上方訪客價查看價差)"
@@ -89,25 +121,31 @@ async def handle_login_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     try:
         if stage == 'account':
+            set_login_status(context, 'account', '正在填入 momo 帳號')
             screenshot = await login.enter_account(user_text)
-            context.user_data['login_stage'] = 'password'
+            set_login_status(context, 'password', '等待輸入 momo 密碼')
             await send_login_screenshot(update, screenshot, "請輸入 momo 密碼。")
             return True
 
         if stage == 'password':
+            set_login_status(context, 'password', '正在填入 momo 密碼')
             try:
                 await update.message.delete()
             except Exception:
                 pass
             screenshot = await login.enter_password(user_text)
             await send_login_screenshot(update, screenshot, "已填入密碼，正在送出登入...")
-            screenshot = await login.click_login()
-            context.user_data['login_stage'] = 'otp_or_done'
+            set_login_status(context, 'submitting', '已填入密碼，正在點擊登入')
+            await update.effective_message.reply_text("正在點擊登入，最多等待 30 秒...")
+            screenshot = await asyncio.wait_for(login.click_login(), timeout=30)
+            set_login_status(context, 'otp_or_done', '等待 OTP 或登入完成確認')
             await send_login_screenshot(update, screenshot, "如果畫面要求驗證碼，請輸入驗證碼；如果已登入完成，請輸入 /login_done。")
             return True
 
         if stage == 'otp_or_done':
+            set_login_status(context, 'otp_or_done', '正在送出驗證碼')
             screenshot = await login.enter_otp(user_text)
+            set_login_status(context, 'otp_or_done', '等待登入完成確認')
             await send_login_screenshot(update, screenshot, "已送出驗證碼。如果畫面已登入完成，請輸入 /login_done；若仍需驗證，請再輸入新的驗證碼。")
             return True
     except Exception as e:
@@ -211,6 +249,7 @@ if __name__ == '__main__':
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("login", login))
+    app.add_handler(CommandHandler("login_status", login_status))
     app.add_handler(CommandHandler("login_done", finish_login_and_search))
     app.add_handler(CommandHandler("cancel_login", cancel_login))
     app.add_handler(CommandHandler("logout", logout))
