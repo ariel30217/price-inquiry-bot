@@ -169,14 +169,71 @@ class InteractiveLogin:
     async def click_login(self):
         self.log("clicking login button")
         clicked = await self.page.evaluate("""() => {
-            const btn = document.querySelector("#loginBtn, .btn-login, button[type='submit'], .login_btn") 
-                        || Array.from(document.querySelectorAll("button")).find(b => b.innerText.includes('登入'));
-            if (!btn) return false;
+            const isVisible = (el) => {
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== "none"
+                    && style.visibility !== "hidden"
+                    && rect.width > 0
+                    && rect.height > 0;
+            };
+            const labelOf = (el) => [
+                el.innerText,
+                el.textContent,
+                el.value,
+                el.getAttribute("aria-label"),
+                el.getAttribute("title")
+            ].filter(Boolean).join(" ").trim();
+
+            const selectors = [
+                "#loginBtn",
+                "#login_btn",
+                ".loginBtn",
+                ".login_btn",
+                ".btn-login",
+                ".btnLogin",
+                ".btn-pink",
+                "button[type='submit']",
+                "input[type='submit']",
+                "input[type='button']",
+                "a[href*='login']",
+                "[onclick*='login']",
+                "[onclick*='Login']"
+            ];
+
+            const selected = selectors
+                .flatMap(selector => Array.from(document.querySelectorAll(selector)))
+                .find(el => isVisible(el) && (labelOf(el).includes("登入") || el.id || el.className));
+
+            const textMatched = Array.from(document.querySelectorAll("button, input, a, div, span, p"))
+                .find(el => isVisible(el) && labelOf(el).includes("登入"));
+
+            const btn = selected || textMatched;
+            if (!btn) {
+                return { clicked: false, candidates: Array.from(document.querySelectorAll("button, input, a, div"))
+                    .filter(isVisible)
+                    .slice(0, 20)
+                    .map(el => ({
+                        tag: el.tagName,
+                        id: el.id || "",
+                        className: String(el.className || ""),
+                        label: labelOf(el).slice(0, 40)
+                    })) };
+            }
+
+            btn.scrollIntoView({ block: "center", inline: "center" });
             btn.click();
-            return true;
+            return {
+                clicked: true,
+                tag: btn.tagName,
+                id: btn.id || "",
+                className: String(btn.className || ""),
+                label: labelOf(btn).slice(0, 80)
+            };
         }""")
-        if not clicked:
-            raise RuntimeError("找不到登入按鈕")
+        self.log(f"login click result={clicked}")
+        if not clicked.get("clicked"):
+            raise RuntimeError(f"找不到登入按鈕，候選元素: {clicked.get('candidates')}")
         self.log("login button clicked, waiting for page response")
         await asyncio.sleep(8)
         self.log("capturing post-login screenshot")
