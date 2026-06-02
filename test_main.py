@@ -6,12 +6,15 @@ from price_bot_core import inquiry_price, load_cache, save_cache
 from telegram_bot import clean_item_name, flask_app
 
 # --- 解析邏輯測試 (TC-01, TC-02, TC-03) ---
-def test_parsing_logic():
+@pytest.mark.parametrize("input_text, expected_name", [
+    ("請問義美小泡芙多少錢", "義美小泡芙"),      # TC-01
+    ("想知道毛線賣多少錢呢？", "毛線"),         # TC-02
+    ("請問，草莓價格？", "草莓"),              # TC-03
+    ("幫我找看看這雙球鞋的價錢", "這雙球鞋"),
+])
+def test_parsing_logic(input_text, expected_name):
     """驗證關鍵字過濾與標點符號清理"""
-    assert clean_item_name("請問義美小泡芙多少錢") == "義美小泡芙"
-    assert clean_item_name("想知道毛線賣多少錢呢？") == "毛線"
-    assert clean_item_name("請問，草莓價格？") == "草莓"
-    assert clean_item_name("幫我找看看這雙球鞋的價錢") == "這雙球鞋"
+    assert clean_item_name(input_text) == expected_name
 
 # --- 核心爬蟲測試 (TC-04) ---
 @pytest.mark.asyncio
