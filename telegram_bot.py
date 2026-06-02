@@ -49,13 +49,22 @@ async def wait_for_auth_and_search(update, item_name):
             return
         await asyncio.sleep(5)
 
+def clean_item_name(user_text):
+    """清理使用者輸入，提取商品名稱"""
+    # 移除標點符號與語助詞
+    item_name = re.sub(r"[？?。！!,，呢嗎啦啊]", "", user_text).strip()
+    filter_words = ["請問", "的價格", "的價錢", "賣多少錢", "賣多少", "多少錢", "想知道", "幫我", "搜尋", "查詢", "價格", "價錢", "看看", "多少", "想問", "找", "的"]
+    for word in filter_words:
+        item_name = item_name.replace(word, "")
+    return item_name.strip()
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
-    item_name = re.sub(r"[？?。！!,，]", "", user_text).strip()
-    filter_words = ["請問", "的價格", "的價錢", "賣多少錢", "賣多少", "多少錢", "想知道", "幫我", "搜尋", "查詢", "價格", "價錢", "看看", "多少", "想問", "找", "的"]
-    for word in filter_words: item_name = item_name.replace(word, "")
-    item_name = item_name.strip()
-    if not item_name: return
+    item_name = clean_item_name(user_text)
+    
+    if not item_name:
+        await update.message.reply_text("請輸入具體的商品名稱喔！")
+        return
 
     if os.path.exists('auth.json'):
         await update.message.reply_text(f"🔑 使用【會員身分】查詢「{item_name}」...")
