@@ -103,6 +103,16 @@ def run_f():
     flask_app.run(host='0.0.0.0', port=port)
 
 if __name__ == '__main__':
+    # --- 預設 Session 注入邏輯 (給面試官的驚喜) ---
+    env_auth = os.environ.get('MOMO_AUTH_JSON')
+    if env_auth and not os.path.exists('auth.json'):
+        try:
+            with open('auth.json', 'w', encoding='utf-8') as f:
+                f.write(env_auth)
+            print("✅ 成功從環境變數注入預設登入狀態。")
+        except Exception as e:
+            print(f"❌ 注入失敗: {e}")
+
     threading.Thread(target=run_f, daemon=True).start()
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
