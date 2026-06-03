@@ -53,7 +53,7 @@ def clean_item_name(user_text):
     """清理使用者輸入，提取商品名稱"""
     # 移除標點符號與語助詞
     item_name = re.sub(r"[？?。！!,，呢嗎啦啊]", "", user_text).strip()
-    filter_words = ["請問", "的價格", "的價錢", "賣多少錢", "賣多少", "多少錢", "想知道", "幫我", "搜尋", "查詢", "價格", "價錢", "看看", "多少", "想問", "找", "的"]
+    filter_words = ["請問", "的價格", "的價錢", "賣多少錢", "賣多少", "多少錢", "想知道", "幫我", "搜尋", "查詢", "價格", "價錢", "看看", "多少", "想問", "找", "查", "的"]
     for word in filter_words:
         item_name = item_name.replace(word, "")
     return item_name.strip()
